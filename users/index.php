@@ -2,95 +2,65 @@
 session_start();
 include('inc/header.php');
 include('inc/navbar.php');
-include('../config/dbcon.php');  // Ensure this includes your $con connection
 
 // Check if user is authenticated
-if (!isset($_SESSION['auth']) || !isset($_SESSION['email'])) {
+if (!isset($_SESSION['auth'])) {
     $_SESSION['error'] = "Login to access dashboard!";
     header("Location: ../signin");
     exit(0);
 }
 
-$email = $_SESSION['email'];
-$name = 'Guest';
-$balance = 0.00;
-$verify = 0;
-$user_country = null;
-$currency_symbol = '$';     // fallback
-$currency_code   = 'USD';
-$rate = 1.0;
+$email = $_SESSION['email'] ?? null;
+
+$name            = 'Guest';
+$balance         = 0.00;
+$display_amount  = "0.00";
+$currency_symbol = "$";           // default fallback
+$verify_status   = 0;
 
 if ($email) {
-    // Fetch user data including verify and country
-    $user_query = "SELECT name, balance, verify, country 
-                   FROM users 
-                   WHERE email = ? 
-                   LIMIT 1";
+    // Get user data: name, balance, verify status, country
+    $user_query = "SELECT name, balance, verify, country FROM users WHERE email = ?";
     $stmt = $con->prepare($user_query);
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $user_result = $stmt->get_result();
 
     if ($user_result && $user_result->num_rows > 0) {
-        $user_data    = $user_result->fetch_assoc();
-        $name         = $user_data['name'] ?? 'Guest';
-        $balance      = (float)($user_data['balance'] ?? 0.00);
-        $verify       = (int)($user_data['verify'] ?? 0);
-        $user_country = $user_data['country'] ?? null;
+        $user_data     = $user_result->fetch_assoc();
+        $name          = $user_data['name'] ?? 'Guest';
+        $balance       = (float)($user_data['balance'] ?? 0.00);
+        $verify_status = (int)($user_data['verify'] ?? 0);
+        $user_country  = $user_data['country'] ?? null;
+
+        // Apply special rate & currency only for verify = 2 or 3
+        if (in_array($verify_status, [2, 3]) && $user_country) {
+            $region_query = "SELECT rate, currency FROM region_settings WHERE country = ? LIMIT 1";
+            $region_stmt = $con->prepare($region_query);
+            $region_stmt->bind_param("s", $user_country);
+            $region_stmt->execute();
+            $region_result = $region_stmt->get_result();
+
+            if ($region_result && $region_row = $region_result->fetch_assoc()) {
+                $rate            = (float)($region_row['rate'] ?? 1.0);
+                $currency_symbol = $region_row['currency'] ?: '$';
+                $calculated      = $balance * $rate;
+                $display_amount  = number_format($calculated, 2, '.', $calculated >= 1000 ? ',' : '');
+            } else {
+                // Region not found → show normal balance with warning symbol
+                $display_amount = number_format($balance, 2, '.', $balance >= 1000 ? ',' : '');
+                $currency_symbol = "$"; // or you can set "???" or log error
+            }
+            $region_stmt->close();
+        } else {
+            // Normal user (verify not 2 or 3)
+            $display_amount = number_format($balance, 2, '.', $balance >= 1000 ? ',' : '');
+        }
     }
     $stmt->close();
-
-    // Fetch rate and currency settings
-    if (!empty($user_country)) {
-        $settings_query = "SELECT rate, currency, alt_currency, crypto 
-                           FROM region_settings 
-                           WHERE country = ? 
-                           LIMIT 1";
-        $settings_stmt = $con->prepare($settings_query);
-        $settings_stmt->bind_param("s", $user_country);
-        $settings_stmt->execute();
-        $settings_result = $settings_stmt->get_result();
-
-        if ($settings_row = $settings_result->fetch_assoc()) {
-            $rate = (float)($settings_row['rate'] ?? 1.0);
-            if ($rate <= 0) $rate = 1.0;
-
-            $is_crypto     = (int)($settings_row['crypto'] ?? 0);
-            $base_currency = trim($settings_row['currency'] ?? 'USD');
-            $alt_currency  = trim($settings_row['alt_currency'] ?? 'USD');
-
-            $display_currency = $is_crypto ? $alt_currency : $base_currency;
-
-            // Map currency codes to symbols (expand this list as needed)
-            $symbol_map = [
-                'GHS' => '₵',       // Ghanaian Cedi
-                'NGN' => '₦',       // Nigerian Naira
-                'XOF' => 'CFA',     // West African CFA franc
-                'XAF' => 'FCFA',    // Central African CFA franc
-                'USD' => '$',
-                'EUR' => '€',
-                'GBP' => '£',
-                'KES' => 'KSh',     // Kenyan Shilling (example)
-                'ZAR' => 'R',       // South African Rand (example)
-                // Add more countries/currencies here
-            ];
-
-            $currency_symbol = $symbol_map[strtoupper($display_currency)] ?? $display_currency;
-            $currency_code   = strtoupper($display_currency);
-        }
-        $settings_stmt->close();
-    }
-
-    // Apply rate multiplication only when verify is 2 or 3
-    $display_balance = in_array($verify, [2, 3]) ? round($balance * $rate, 2) : $balance;
-} else {
-    $display_balance = 0.00;
 }
 
-// Format balance (add comma separator for thousands)
-$formatted_balance = number_format($display_balance, 2, '.', $display_balance >= 1000 ? ',' : '');
-
-// Fetch enabled CashTags
+// Fetch enabled CashTags for dashboard
 $cashtag_query = "SELECT cashtag FROM packages WHERE dashboard = 'enabled' ORDER BY cashtag";
 $cashtag_result = mysqli_query($con, $cashtag_query);
 $cashtags = [];
@@ -140,13 +110,10 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
             margin-bottom: 5px;
         }
         .card-amount {
-            font-size: 28px;
+            font-size: 24px;
             font-weight: bold;
             color: #1a1a1a;
             margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 6px;
         }
         .card-detail {
             font-size: 12px;
@@ -174,29 +141,42 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
         .btn-add { background: #007bff; }
         .btn-withdraw { background: #6c757d; }
         .btn-used-cashtags { background: #28a745; }
+        .verified { color: #28a745; font-size: 12px; margin-top: 6px; }
+        .progress {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .progress-circle {
+            width: 12px;
+            height: 12px;
+            background: #ffd700;
+            border-radius: 50%;
+        }
+        .bitcoin-graph {
+            width: 50px;
+            height: 20px;
+            background: linear-gradient(to right, #28a745, #ffd700);
+            border-radius: 5px;
+            margin-left: 5px;
+        }
         .copy-btn {
             border: none;
             outline: none;
             color: #012970;
             background: #f7f7f7;
             border-radius: 5px;
-            padding: 2px 8px;
+            padding: 2px 5px;
             cursor: pointer;
-            font-size: 12px;
+            margin-left: 10px;
+            font-size: 10px;
         }
         .copy-btn:hover {
             background: #e0e0e0;
         }
-        .balance-hint {
-            font-size: 12px;
-            color: #666;
-            margin-top: 6px;
-        }
-        .cashtag-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 8px;
+        .copy-btn i {
+            font-size: 10px;
+            vertical-align: middle;
         }
         .footer {
             position: fixed;
@@ -210,10 +190,23 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
             font-size: 12px;
             color: #757575;
         }
-        body { padding-bottom: 60px; }
+        body {
+            padding-bottom: 60px;
+        }
         @media (max-width: 576px) {
-            .footer { font-size: 10px; padding: 8px 0; }
-            .container { padding: 0 10px; }
+            .footer {
+                padding: 5px 0;
+                font-size: 10px;
+            }
+            .container {
+                padding: 0 10px;
+            }
+        }
+        .cashtag-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 5px;
         }
     </style>
 </head>
@@ -223,19 +216,13 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
         <div class="card">
             <div class="card-title">Cash balance</div>
             <div class="card-amount">
-                <?php echo htmlspecialchars($currency_symbol); ?>
-                <?php echo htmlspecialchars($formatted_balance); ?>
+                <?php echo htmlspecialchars($currency_symbol . $display_amount); ?>
             </div>
-
-            <?php if (in_array($verify, [2, 3]) && $rate != 1.0): ?>
-                <div class="balance-hint">
-                    Base: <?php echo htmlspecialchars($currency_symbol); ?><?php echo number_format($balance, 2); ?> × <?php echo number_format($rate, 4); ?>
-                </div>
+            <div class="card-title">Hello <?php echo htmlspecialchars($name); ?>, Scan CashTags to Add Funds into Your Account</div>
+            
+            <?php if (in_array($verify_status, [2, 3])): ?>
+                <div class="verified">• Verified account (special rate applied)</div>
             <?php endif; ?>
-
-            <div class="card-title" style="margin-top: 16px;">
-                Hello <?php echo htmlspecialchars($name); ?>, Scan CashTags to Add Funds into Your Account
-            </div>
         </div>
 
         <!-- Action Buttons -->
@@ -273,6 +260,7 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
     </div>
 
     <script>
+        // Copy button functionality
         document.querySelectorAll('.copy-btn').forEach(button => {
             button.addEventListener('click', function() {
                 const cashtag = this.getAttribute('data-cashtag');
@@ -284,10 +272,12 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
                 try {
                     document.execCommand('copy');
                     this.innerHTML = 'copied!';
-                    setTimeout(() => this.innerHTML = '<i class="bi bi-front"></i>', 2000);
+                    setTimeout(() => {
+                        this.innerHTML = '<i class="bi bi-front"></i>';
+                    }, 2000);
                 } catch (e) {
                     console.error('Copy failed:', e);
-                    alert('Copy failed. Please copy manually.');
+                    alert('Copy to clipboard failed. Please try manually.');
                 }
                 document.body.removeChild(tempInput);
             });
