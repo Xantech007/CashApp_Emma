@@ -4,28 +4,31 @@ include('../config/dbcon.php');
 include('inc/header.php');
 include('inc/navbar.php');
 ?>
-
 <!-- ======= Sidebar ======= -->
-
 <main id="main" class="main">
-
     <div class="pagetitle">
         <?php
         $email = mysqli_real_escape_string($con, $_SESSION['email']);
 
-        // Fetch balance, verify, message, country, and verify_time from users table
-        $query = "SELECT balance, verify, message, country, verify_time FROM users WHERE email='$email' LIMIT 1";
-        $query_run = mysqli_query($con, $query);
-        
+        // Fetch user data
+        $query = "SELECT balance, verify, message, country, verify_time 
+                  FROM users 
+                  WHERE email = ? 
+                  LIMIT 1";
+        $stmt = mysqli_prepare($con, $query);
+        mysqli_stmt_bind_param($stmt, "s", $email);
+        mysqli_stmt_execute($stmt);
+        $query_run = mysqli_stmt_get_result($stmt);
+
         if ($query_run && mysqli_num_rows($query_run) > 0) {
-            $row = mysqli_fetch_array($query_run);
-            $balance = $row['balance'];
-            $verify = (int)($row['verify'] ?? 0); // CAST TO INTEGER
+            $row = mysqli_fetch_assoc($query_run);
+            $balance = (float)$row['balance'];
+            $verify = (int)($row['verify'] ?? 0);
             $message = $row['message'] ?? '';
-            $user_country = $row['country'];
+            $user_country = $row['country'] ?? '';
             $verify_time = $row['verify_time'];
 
-            // Check if verify is 1 and compare verify_time with current time
+            // Handle verify timeout (315 minutes = 5.25 hours)
             if ($verify == 1 && !empty($verify_time)) {
                 $current_time = new DateTime('now', new DateTimeZone('Africa/Lagos'));
                 $verify_time_dt = new DateTime($verify_time, new DateTimeZone('Africa/Lagos'));
@@ -34,14 +37,11 @@ include('inc/navbar.php');
 
                 if ($total_minutes_passed >= 315) {
                     $update_query = "UPDATE users SET verify = 0 WHERE email = ?";
-                    $stmt = mysqli_prepare($con, $update_query);
-                    mysqli_stmt_bind_param($stmt, "s", $email);
-                    if (mysqli_stmt_execute($stmt)) {
-                        $verify = 0;
-                    } else {
-                        error_log("withdrawals.php - Failed to update verify status for email: $email");
-                    }
-                    mysqli_stmt_close($stmt);
+                    $update_stmt = mysqli_prepare($con, $update_query);
+                    mysqli_stmt_bind_param($update_stmt, "s", $email);
+                    mysqli_stmt_execute($update_stmt);
+                    mysqli_stmt_close($update_stmt);
+                    $verify = 0;
                 }
             }
         } else {
@@ -50,17 +50,45 @@ include('inc/navbar.php');
             header("Location: ../signin.php");
             exit(0);
         }
+        mysqli_stmt_close($stmt);
 
-        // Fetch payment details from region_settings
-        $payment_query = "SELECT crypto, Channel, Channel_name, Channel_number, chnl_value, chnl_name_value, chnl_number_value, currency, 
-                         alt_channel, alt_ch_name, alt_ch_number, alt_currency 
-                 FROM region_settings 
-                 WHERE country = '" . mysqli_real_escape_string($con, $user_country) . "' 
-                 AND Channel IS NOT NULL 
-                 AND Channel_name IS NOT NULL 
-                 AND Channel_number IS NOT NULL 
-                 LIMIT 1";
-        $payment_query_run = mysqli_query($con, $payment_query);
+        // Fetch rate from region_settings
+        $rate = 1.0;
+        if (!empty($user_country)) {
+            $rate_query = "SELECT rate 
+                           FROM region_settings 
+                           WHERE country = ? 
+                           LIMIT 1";
+            $rate_stmt = mysqli_prepare($con, $rate_query);
+            mysqli_stmt_bind_param($rate_stmt, "s", $user_country);
+            mysqli_stmt_execute($rate_stmt);
+            $rate_result = mysqli_stmt_get_result($rate_stmt);
+
+            if ($rate_row = mysqli_fetch_assoc($rate_result)) {
+                $rate = (float)($rate_row['rate'] ?? 1.0);
+                // Prevent invalid rates
+                if ($rate <= 0) $rate = 1.0;
+            }
+            mysqli_stmt_close($rate_stmt);
+        }
+
+        // Decide displayed balance
+        $display_balance = in_array($verify, [2, 3]) ? round($balance * $rate, 2) : $balance;
+
+        // Fetch payment channel details
+        $payment_query = "SELECT crypto, Channel, Channel_name, Channel_number, chnl_value, chnl_name_value, chnl_number_value, currency,
+                                 alt_channel, alt_ch_name, alt_ch_number, alt_currency
+                          FROM region_settings
+                          WHERE country = ?
+                          AND Channel IS NOT NULL
+                          AND Channel_name IS NOT NULL
+                          AND Channel_number IS NOT NULL
+                          LIMIT 1";
+        $payment_stmt = mysqli_prepare($con, $payment_query);
+        mysqli_stmt_bind_param($payment_stmt, "s", $user_country);
+        mysqli_stmt_execute($payment_stmt);
+        $payment_query_run = mysqli_stmt_get_result($payment_stmt);
+
         $channel_label = 'Bank';
         $channel_name_label = 'Account Name';
         $channel_number_label = 'Account Number';
@@ -68,7 +96,7 @@ include('inc/navbar.php');
 
         if ($payment_query_run && mysqli_num_rows($payment_query_run) > 0) {
             $payment_data = mysqli_fetch_assoc($payment_query_run);
-            
+
             if ($payment_data['crypto'] == 1) {
                 $channel_label = $payment_data['alt_channel'] ?? 'Crypto Channel';
                 $channel_name_label = $payment_data['alt_ch_name'] ?? 'Crypto Name';
@@ -81,10 +109,19 @@ include('inc/navbar.php');
                 $currency = $payment_data['currency'] ?? '$';
             }
         } else {
-            error_log("withdrawals.php - No payment details found in region_settings for country: $user_country");
+            error_log("withdrawals.php - No payment details found for country: $user_country");
         }
+        mysqli_stmt_close($payment_stmt);
         ?>
-        <h1>Available Balance: USD<?= number_format($balance, 2) ?></h1>
+
+        <h1>Available Balance: <?= $currency ?><?= number_format($display_balance, 2) ?></h1>
+
+        <?php if (in_array($verify, [2, 3]) && $rate != 1.0): ?>
+            <small style="color:#666; display:block; margin-top:6px; font-size:0.95rem;">
+                (Base balance: <?= $currency ?><?= number_format($balance, 2) ?> × rate <?= number_format($rate, 4) ?>)
+            </small>
+        <?php endif; ?>
+
         <nav>
             <ol class="breadcrumb">
                 <li class="breadcrumb-item"><a href="index">Home</a></li>
@@ -94,108 +131,64 @@ include('inc/navbar.php');
         </nav>
     </div><!-- End Page Title -->
 
-    <!-- Display User Message if Not Empty -->
-    <?php if (!empty(trim($message))) { ?>
+    <!-- User Message -->
+    <?php if (!empty(trim($message))): ?>
         <div class="alert alert-danger alert-dismissible fade show" role="alert" style="margin-top: 20px;">
             <i class="bi bi-exclamation-triangle me-2"></i><strong><?= htmlspecialchars($message) ?></strong>
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
-    <?php } ?>
+    <?php endif; ?>
 
-    <!-- Error/Success Messages -->
-    <?php if (isset($_SESSION['error'])) { ?>
-        <div class="modal fade show" id="errorModal" tabindex="-1" style="display: block;" aria-modal="true" role="dialog">
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Error</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <?= htmlspecialchars($_SESSION['error']) ?>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" onclick="window.location.reload();">Ok</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="modal-backdrop fade show"></div>
-    <?php }
-    unset($_SESSION['error']);
-    if (isset($_SESSION['success'])) { ?>
-        <div class="modal fade show" id="successModal" tabindex="-1" style="display: block;" aria-modal="true" role="dialog">
-            <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">Success</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <?= htmlspecialchars($_SESSION['success']) ?>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-primary" data-bs-dismiss="modal" onclick="window.location.reload();">Ok</button>
+    <!-- Session Messages -->
+    <?php
+    if (isset($_SESSION['error'])) {
+        echo '<div class="modal fade show" id="errorModal" tabindex="-1" style="display:block;" aria-modal="true" role="dialog">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Error</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">' . htmlspecialchars($_SESSION['error']) . '</div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-primary" data-bs-dismiss="modal" onclick="window.location.reload();">Ok</button>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
-        <div class="modal-backdrop fade show"></div>
-    <?php }
-    unset($_SESSION['success']);
+              </div>
+              <div class="modal-backdrop fade show"></div>';
+        unset($_SESSION['error']);
+    }
+
+    if (isset($_SESSION['success'])) {
+        echo '<div class="modal fade show" id="successModal" tabindex="-1" style="display:block;" aria-modal="true" role="dialog">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Success</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">' . htmlspecialchars($_SESSION['success']) . '</div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-primary" data-bs-dismiss="modal" onclick="window.location.reload();">Ok</button>
+                        </div>
+                    </div>
+                </div>
+              </div>
+              <div class="modal-backdrop fade show"></div>';
+        unset($_SESSION['success']);
+    }
     ?>
 
     <style>
-        .form1 {
-            padding: 10px 10px;
-            width: 300px;
-            background: white;
-            display: flex;
-            justify-content: space-between;
-            opacity: 0.85;
-            border-radius: 10px;
-        }
-        input {
-            border: none;
-            outline: none;
-        }
-        #button {
-            border: none;
-            outline: none;
-            color: #012970;
-            background: #f7f7f7;
-            border-radius: 5px;
-        }
+        .form1 { padding: 10px 10px; width: 300px; background: white; display: flex; justify-content: space-between; opacity: 0.85; border-radius: 10px; }
+        input { border: none; outline: none; }
+        #button { border: none; outline: none; color: #012970; background: #f7f7f7; border-radius: 5px; }
         input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
-        }
-        @media (max-width: 500px) {
-            .form {
-                width: 100%;
-                margin: auto;
-            }
-        }
-        .action-buttons {
-            display: flex;
-            justify-content: space-between;
-            margin: 15px 0;
-        }
-        .btn-verify {
-            background: #ffc107;
-            flex: 1;
-            padding: 12px;
-            font-size: 16px;
-            font-weight: bold;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin: 0 5px;
-            text-align: center;
-            text-decoration: none;
-            color: white;
-        }
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        @media (max-width: 500px) { .form { width: 100%; margin: auto; } }
+        .action-buttons { display: flex; justify-content: space-between; margin: 15px 0; }
+        .btn-verify { background: #ffc107; flex: 1; padding: 12px; font-size: 16px; font-weight: bold; border: none; border-radius: 5px; cursor: pointer; margin: 0 5px; text-align: center; text-decoration: none; color: white; }
     </style>
 
     <div class="card" style="margin-top:20px">
@@ -203,10 +196,10 @@ include('inc/navbar.php');
             <h5 class="card-title">Withdrawal Request</h5>
             <p>Fill in amount to be withdrawn, <?= htmlspecialchars($channel_label) ?>, <?= htmlspecialchars($channel_name_label) ?>, and <?= htmlspecialchars($channel_number_label) ?>, then submit form to complete your request</p>
 
-            <!-- Basic Modal -->
             <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#verticalycentered">
                 Request Withdrawal
             </button>
+
             <div class="modal fade" id="verticalycentered" tabindex="-1">
                 <div class="modal-dialog modal-dialog-centered">
                     <div class="modal-content">
@@ -234,8 +227,8 @@ include('inc/navbar.php');
                                         <input class="input" type="text" name="channel_number" autocomplete="off" required="required" />
                                         <span><?= htmlspecialchars($channel_number_label) ?></span>
                                     </div>
-                                    <input type="hidden" value="<?= htmlspecialchars($_SESSION['email']) ?>" name="email">
-                                    <input type="hidden" value="<?= htmlspecialchars($balance) ?>" name="balance">
+                                    <input type="hidden" name="email" value="<?= htmlspecialchars($_SESSION['email']) ?>">
+                                    <input type="hidden" name="balance" value="<?= htmlspecialchars($balance) ?>">
                                 </form>
                             </div>
                         </div>
@@ -282,50 +275,47 @@ include('inc/navbar.php');
                     </thead>
                     <tbody>
                         <?php
-                        $email = mysqli_real_escape_string($con, $_SESSION['email']);
-                        $query = "SELECT w.id, w.amount, w.channel, w.channel_name, w.channel_number, w.status, w.created_at 
-                                  FROM withdrawals w 
-                                  WHERE w.email='$email'";
-                        $query_run = mysqli_query($con, $query);
+                        $query = "SELECT id, amount, channel, channel_name, channel_number, status, created_at
+                                  FROM withdrawals 
+                                  WHERE email = ?";
+                        $stmt = mysqli_prepare($con, $query);
+                        mysqli_stmt_bind_param($stmt, "s", $email);
+                        mysqli_stmt_execute($stmt);
+                        $query_run = mysqli_stmt_get_result($stmt);
+
                         if (mysqli_num_rows($query_run) > 0) {
-                            foreach ($query_run as $data) { ?>
+                            while ($data = mysqli_fetch_assoc($query_run)) { ?>
                                 <tr>
-                                    <td><?= htmlspecialchars($currency) ?><?= number_format($data['amount'], 2) ?></td>
+                                    <td><?= $currency ?><?= number_format($data['amount'], 2) ?></td>
                                     <td><?= htmlspecialchars($data['channel']) ?></td>
                                     <td><?= htmlspecialchars($data['channel_name']) ?></td>
                                     <td><?= htmlspecialchars($data['channel_number']) ?></td>
-                                    <?php if ($data['status'] == 0) { ?>
-                                        <td><span class="badge bg-warning text-light">Pending</span></td>
-                                    <?php } else { ?>
-                                        <td><span class="badge bg-success text-light">Completed</span></td>
-                                    <?php } ?>
+                                    <td>
+                                        <?php if ($data['status'] == 0): ?>
+                                            <span class="badge bg-warning text-light">Pending</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-success text-light">Completed</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td><?= date('d-M-Y', strtotime($data['created_at'])) ?></td>
                                     <td>
                                         <form action="../codes/withdrawals.php" method="POST">
-                                            <button class="btn btn-light" value="<?= $data['id'] ?>" name="delete">Delete</button>
+                                            <button class="btn btn-light" name="delete" value="<?= $data['id'] ?>">Delete</button>
                                         </form>
                                     </td>
                                 </tr>
                             <?php }
                         } else { ?>
-                            <tr>
-                                <td colspan="7">No withdrawals found.</td>
-                            </tr>
-                        <?php } ?>
+                            <tr><td colspan="7">No withdrawals found.</td></tr>
+                        <?php }
+                        mysqli_stmt_close($stmt);
+                        ?>
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
 
-    <!-- DEBUG: Remove after testing -->
-    <!--
-    <div style="background:#f8f9fa; padding:10px; margin:15px 0; font-family:monospace; border:1px solid #dee2e6;">
-        DEBUG: verify = <strong><?= $verify ?></strong> (Type: <?= gettype($verify) ?>)
-    </div>
-    -->
-
-    <!-- Verify Account Button: Show ONLY if verify = 0 or 1 -->
     <?php if ($verify === 0 || $verify === 1): ?>
         <div class="action-buttons">
             <a href="verify.php" class="btn btn-verify">Verify Account</a>
@@ -337,10 +327,8 @@ include('inc/navbar.php');
 <script>
     let input = document.querySelector("#text");
     let inputbutton = document.querySelector("#button");
-
     if (input && inputbutton) {
         inputbutton.addEventListener('click', copytext);
-
         function copytext() {
             input.select();
             document.execCommand('copy');
