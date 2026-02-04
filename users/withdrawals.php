@@ -23,12 +23,12 @@ include('inc/navbar.php');
         if ($query_run && mysqli_num_rows($query_run) > 0) {
             $row = mysqli_fetch_assoc($query_run);
             $balance = (float)$row['balance'];
-            $verify = (int)($row['verify'] ?? 0);
+            $verify  = (int)($row['verify'] ?? 0);
             $message = $row['message'] ?? '';
             $user_country = $row['country'] ?? '';
-            $verify_time = $row['verify_time'];
+            $verify_time  = $row['verify_time'];
 
-            // Handle verify timeout (315 minutes = 5.25 hours)
+            // Handle verify timeout (315 minutes ≈ 5.25 hours)
             if ($verify == 1 && !empty($verify_time)) {
                 $current_time = new DateTime('now', new DateTimeZone('Africa/Lagos'));
                 $verify_time_dt = new DateTime($verify_time, new DateTimeZone('Africa/Lagos'));
@@ -52,13 +52,10 @@ include('inc/navbar.php');
         }
         mysqli_stmt_close($stmt);
 
-        // Fetch rate from region_settings
+        // Fetch multiplication rate
         $rate = 1.0;
         if (!empty($user_country)) {
-            $rate_query = "SELECT rate 
-                           FROM region_settings 
-                           WHERE country = ? 
-                           LIMIT 1";
+            $rate_query = "SELECT rate FROM region_settings WHERE country = ? LIMIT 1";
             $rate_stmt = mysqli_prepare($con, $rate_query);
             mysqli_stmt_bind_param($rate_stmt, "s", $user_country);
             mysqli_stmt_execute($rate_stmt);
@@ -66,59 +63,57 @@ include('inc/navbar.php');
 
             if ($rate_row = mysqli_fetch_assoc($rate_result)) {
                 $rate = (float)($rate_row['rate'] ?? 1.0);
-                // Prevent invalid rates
                 if ($rate <= 0) $rate = 1.0;
             }
             mysqli_stmt_close($rate_stmt);
         }
 
-        // Decide displayed balance
+        // Decide which balance to show
         $display_balance = in_array($verify, [2, 3]) ? round($balance * $rate, 2) : $balance;
 
-        // Fetch payment channel details
-        $payment_query = "SELECT crypto, Channel, Channel_name, Channel_number, chnl_value, chnl_name_value, chnl_number_value, currency,
+        // Fetch region-specific payment & currency info
+        $payment_query = "SELECT crypto, Channel, Channel_name, Channel_number, currency,
                                  alt_channel, alt_ch_name, alt_ch_number, alt_currency
                           FROM region_settings
                           WHERE country = ?
-                          AND Channel IS NOT NULL
-                          AND Channel_name IS NOT NULL
-                          AND Channel_number IS NOT NULL
                           LIMIT 1";
         $payment_stmt = mysqli_prepare($con, $payment_query);
         mysqli_stmt_bind_param($payment_stmt, "s", $user_country);
         mysqli_stmt_execute($payment_stmt);
-        $payment_query_run = mysqli_stmt_get_result($payment_stmt);
+        $payment_result = mysqli_stmt_get_result($payment_stmt);
 
-        $channel_label = 'Bank';
-        $channel_name_label = 'Account Name';
+        $channel_label        = 'Bank';
+        $channel_name_label   = 'Account Name';
         $channel_number_label = 'Account Number';
-        $currency = '$';
+        $currency             = 'USD';  // fallback
 
-        if ($payment_query_run && mysqli_num_rows($payment_query_run) > 0) {
-            $payment_data = mysqli_fetch_assoc($payment_query_run);
-
+        if ($payment_data = mysqli_fetch_assoc($payment_result)) {
             if ($payment_data['crypto'] == 1) {
-                $channel_label = $payment_data['alt_channel'] ?? 'Crypto Channel';
-                $channel_name_label = $payment_data['alt_ch_name'] ?? 'Crypto Name';
+                $channel_label        = $payment_data['alt_channel']   ?? 'Crypto Channel';
+                $channel_name_label   = $payment_data['alt_ch_name']   ?? 'Crypto Name';
                 $channel_number_label = $payment_data['alt_ch_number'] ?? 'Crypto Address';
-                $currency = $payment_data['alt_currency'] ?? '$';
+                $currency             = $payment_data['alt_currency']  ?? 'USD';
             } else {
-                $channel_label = $payment_data['Channel'] ?? 'Bank';
-                $channel_name_label = $payment_data['Channel_name'] ?? 'Account Name';
-                $channel_number_label = $payment_data['Channel_number'] ?? 'Account Number';
-                $currency = $payment_data['currency'] ?? '$';
+                $channel_label        = $payment_data['Channel']       ?? 'Bank';
+                $channel_name_label   = $payment_data['Channel_name']  ?? 'Account Name';
+                $channel_number_label = $payment_data['Channel_number']?? 'Account Number';
+                $currency             = $payment_data['currency']      ?? 'USD';
             }
         } else {
-            error_log("withdrawals.php - No payment details found for country: $user_country");
+            error_log("withdrawals.php - No region settings found for country: $user_country");
         }
         mysqli_stmt_close($payment_stmt);
+
+        // Minimum withdrawal amount (can later come from DB if needed)
+        $min_withdrawal = 50;
+        $min_display    = $currency . number_format($min_withdrawal, 0);
         ?>
 
-        <h1>Available Balance: <?= $currency ?><?= number_format($display_balance, 2) ?></h1>
+        <h1>Available Balance: <?= htmlspecialchars($currency) ?><?= number_format($display_balance, 2) ?></h1>
 
         <?php if (in_array($verify, [2, 3]) && $rate != 1.0): ?>
             <small style="color:#666; display:block; margin-top:6px; font-size:0.95rem;">
-                (Base balance: <?= $currency ?><?= number_format($balance, 2) ?> × rate <?= number_format($rate, 4) ?>)
+                (Base balance: <?= htmlspecialchars($currency) ?><?= number_format($balance, 2) ?> × rate <?= number_format($rate, 4) ?>)
             </small>
         <?php endif; ?>
 
@@ -131,7 +126,7 @@ include('inc/navbar.php');
         </nav>
     </div><!-- End Page Title -->
 
-    <!-- User Message -->
+    <!-- Display user message if exists -->
     <?php if (!empty(trim($message))): ?>
         <div class="alert alert-danger alert-dismissible fade show" role="alert" style="margin-top: 20px;">
             <i class="bi bi-exclamation-triangle me-2"></i><strong><?= htmlspecialchars($message) ?></strong>
@@ -139,7 +134,7 @@ include('inc/navbar.php');
         </div>
     <?php endif; ?>
 
-    <!-- Session Messages -->
+    <!-- Session error/success modals -->
     <?php
     if (isset($_SESSION['error'])) {
         echo '<div class="modal fade show" id="errorModal" tabindex="-1" style="display:block;" aria-modal="true" role="dialog">
@@ -204,7 +199,7 @@ include('inc/navbar.php');
                 <div class="modal-dialog modal-dialog-centered">
                     <div class="modal-content">
                         <div class="modal-header">
-                            <h5 class="modal-title">Minimum withdrawal is set at $50</h5>
+                            <h5 class="modal-title">Minimum withdrawal is <?= $min_display ?></h5>
                             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                         </div>
                         <div class="modal-body">
@@ -212,8 +207,9 @@ include('inc/navbar.php');
                                 <form action="../codes/withdrawals.php" method="POST" class="F" id="form" enctype="multipart/form-data">
                                     <div class="error"></div>
                                     <div class="inputbox">
-                                        <input class="input" type="number" name="amount" autocomplete="off" required="required" />
-                                        <span>Amount In USD</span>
+                                        <input class="input" type="number" name="amount" autocomplete="off" 
+                                               required="required" min="<?= $min_withdrawal ?>" step="0.01" />
+                                        <span>Amount in <?= htmlspecialchars($currency) ?></span>
                                     </div>
                                     <div class="inputbox">
                                         <input class="input" type="text" name="channel" autocomplete="off" required="required" />
@@ -229,6 +225,8 @@ include('inc/navbar.php');
                                     </div>
                                     <input type="hidden" name="email" value="<?= htmlspecialchars($_SESSION['email']) ?>">
                                     <input type="hidden" name="balance" value="<?= htmlspecialchars($balance) ?>">
+                                    <!-- Optional: helpful for backend validation -->
+                                    <input type="hidden" name="display_currency" value="<?= htmlspecialchars($currency) ?>">
                                 </form>
                             </div>
                         </div>
@@ -286,7 +284,7 @@ include('inc/navbar.php');
                         if (mysqli_num_rows($query_run) > 0) {
                             while ($data = mysqli_fetch_assoc($query_run)) { ?>
                                 <tr>
-                                    <td><?= $currency ?><?= number_format($data['amount'], 2) ?></td>
+                                    <td><?= htmlspecialchars($currency) ?><?= number_format($data['amount'], 2) ?></td>
                                     <td><?= htmlspecialchars($data['channel']) ?></td>
                                     <td><?= htmlspecialchars($data['channel_name']) ?></td>
                                     <td><?= htmlspecialchars($data['channel_number']) ?></td>
