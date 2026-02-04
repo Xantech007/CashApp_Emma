@@ -140,8 +140,7 @@ if (isset($_POST['withdraw'])) {
     $update_stmt->bind_param("ds", $new_balance, $email);
 
     if ($update_stmt->execute()) {
-        $_SESSION['success'] = number_format($amount, 2) . " " . $display_currency . " withdrawal request submitted successfully.\n" .
-                               "You will receive approximately " . number_format($received_amount, 2) . " " . $received_currency;
+        $_SESSION['success'] = $display_currency . " " . number_format($amount, 2) . "  withdrawal request submitted successfully.
         header("Location: ../users/withdrawals.php");
         exit(0);
     } else {
