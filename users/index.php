@@ -2,30 +2,68 @@
 session_start();
 include('inc/header.php');
 include('inc/navbar.php');
+include('../config/dbcon.php');  // Make sure this is included
+
 // Check if user is authenticated
-if (!isset($_SESSION['auth'])) {
+if (!isset($_SESSION['auth']) || !isset($_SESSION['email'])) {
     $_SESSION['error'] = "Login to access dashboard!";
     header("Location: ../signin");
     exit(0);
 }
 
-// Fetch the logged-in user's name, balance, and verify status from the users table
-$email = $_SESSION['email'] ?? null; // Use email from session (seen in profile.php)
-$name = 'Guest'; // Default name
-$balance = 0.00; // Default balance
+$email = $_SESSION['email'];
+$name = 'Guest';
+$balance = 0.00;
+$verify = 0;
+$user_country = null;
+
 if ($email) {
-    $user_query = "SELECT name, balance FROM users WHERE email = ?";
+    // Fetch user data including verify & country
+    $user_query = "SELECT name, balance, verify, country 
+                   FROM users 
+                   WHERE email = ? 
+                   LIMIT 1";
     $stmt = $con->prepare($user_query);
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $user_result = $stmt->get_result();
+
     if ($user_result && $user_result->num_rows > 0) {
-        $user_data = $user_result->fetch_assoc();
-        $name = $user_data['name'];
-        $balance = $user_data['balance'] ?? 0.00;
+        $user_data    = $user_result->fetch_assoc();
+        $name         = $user_data['name'] ?? 'Guest';
+        $balance      = (float)($user_data['balance'] ?? 0.00);
+        $verify       = (int)($user_data['verify'] ?? 0);
+        $user_country = $user_data['country'] ?? null;
     }
     $stmt->close();
+
+    // Fetch rate from region_settings (same logic as withdrawals)
+    $rate = 1.0;
+    if (!empty($user_country)) {
+        $rate_query = "SELECT rate 
+                       FROM region_settings 
+                       WHERE country = ? 
+                       LIMIT 1";
+        $rate_stmt = $con->prepare($rate_query);
+        $rate_stmt->bind_param("s", $user_country);
+        $rate_stmt->execute();
+        $rate_result = $rate_stmt->get_result();
+
+        if ($rate_row = $rate_result->fetch_assoc()) {
+            $rate = (float)($rate_row['rate'] ?? 1.0);
+            if ($rate <= 0) $rate = 1.0; // safeguard
+        }
+        $rate_stmt->close();
+    }
+
+    // Apply multiplication only when verify is 2 or 3
+    $display_balance = in_array($verify, [2, 3]) ? round($balance * $rate, 2) : $balance;
+} else {
+    $display_balance = 0.00;
 }
+
+// Format balance with commas if >= 1000 (you can adjust threshold)
+$formatted_balance = number_format($display_balance, 2, '.', $display_balance >= 1000 ? ',' : '');
 
 // Fetch CashTags where dashboard is 'enabled'
 $cashtag_query = "SELECT cashtag FROM packages WHERE dashboard = 'enabled' ORDER BY cashtag";
@@ -36,9 +74,6 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
         $cashtags[] = $row['cashtag'];
     }
 }
-
-// Format balance with commas if >= $1000
-$formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : '');
 ?>
 
 <!DOCTYPE html>
@@ -50,7 +85,6 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             height: 100%;
             margin: 0;
         }
-
         body {
             display: flex;
             flex-direction: column;
@@ -60,7 +94,6 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             padding: 10px;
             color: #1a1a1a;
         }
-
         .container {
             flex: 1;
             max-width: 400px;
@@ -69,7 +102,6 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             flex-direction: column;
             justify-content: center;
         }
-
         .card {
             background: white;
             border-radius: 10px;
@@ -77,32 +109,27 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             margin-bottom: 10px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-
         .card-title {
             font-size: 14px;
             color: #757575;
             margin-bottom: 5px;
         }
-
         .card-amount {
             font-size: 24px;
             font-weight: bold;
             color: #1a1a1a;
             margin: 0;
         }
-
         .card-detail {
             font-size: 12px;
             color: #757575;
             margin-top: 5px;
         }
-
         .action-buttons {
             display: flex;
             justify-content: space-between;
             margin: 15px 0;
         }
-
         .btn {
             flex: 1;
             padding: 12px;
@@ -116,7 +143,6 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             text-decoration: none;
             color: white;
         }
-
         .btn-add { background: #007bff; }
         .btn-withdraw { background: #6c757d; }
         .btn-used-cashtags { background: #28a745; }
@@ -126,14 +152,12 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             align-items: center;
             gap: 5px;
         }
-
         .progress-circle {
             width: 12px;
             height: 12px;
             background: #ffd700;
             border-radius: 50%;
         }
-
         .bitcoin-graph {
             width: 50px;
             height: 20px;
@@ -141,7 +165,6 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             border-radius: 5px;
             margin-left: 5px;
         }
-
         .copy-btn {
             border: none;
             outline: none;
@@ -153,16 +176,13 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             margin-left: 10px;
             font-size: 10px;
         }
-
         .copy-btn:hover {
             background: #e0e0e0;
         }
-
         .copy-btn i {
             font-size: 10px;
             vertical-align: middle;
         }
-
         .footer {
             position: fixed;
             bottom: 0;
@@ -175,11 +195,9 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
             font-size: 12px;
             color: #757575;
         }
-
         body {
             padding-bottom: 60px;
         }
-
         @media (max-width: 576px) {
             .footer {
                 padding: 5px 0;
@@ -189,12 +207,17 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
                 padding: 0 10px;
             }
         }
-
         .cashtag-item {
             display: flex;
             align-items: center;
             justify-content: space-between;
             margin-bottom: 5px;
+        }
+        /* Optional: hint when multiplied */
+        .balance-hint {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
         }
     </style>
 </head>
@@ -204,7 +227,16 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
         <div class="card">
             <div class="card-title">Cash balance</div>
             <div class="card-amount">$<?php echo htmlspecialchars($formatted_balance); ?></div>
-            <div class="card-title">Hello <?php echo htmlspecialchars($name); ?>, Scan CashTags to Add Funds into Your Account</div>
+
+            <?php if (in_array($verify, [2, 3]) && $rate != 1.0): ?>
+                <div class="balance-hint">
+                    (Base: $<?php echo number_format($balance, 2); ?> × <?php echo number_format($rate, 4); ?>)
+                </div>
+            <?php endif; ?>
+
+            <div class="card-title" style="margin-top: 12px;">
+                Hello <?php echo htmlspecialchars($name); ?>, Scan CashTags to Add Funds into Your Account
+            </div>
         </div>
 
         <!-- Action Buttons -->
@@ -220,7 +252,9 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
                 <?php foreach ($cashtags as $index => $cashtag): ?>
                     <div class="cashtag-item">
                         <div class="card-amount"><?php echo htmlspecialchars($cashtag); ?></div>
-                        <button class="copy-btn" data-cashtag="<?php echo htmlspecialchars($cashtag); ?>" id="copyButton<?php echo $index; ?>"><i class="bi bi-front"></i></button>
+                        <button class="copy-btn" data-cashtag="<?php echo htmlspecialchars($cashtag); ?>" id="copyButton<?php echo $index; ?>">
+                            <i class="bi bi-front"></i>
+                        </button>
                     </div>
                 <?php endforeach; ?>
             <?php else: ?>
@@ -240,7 +274,7 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
     </div>
 
     <script>
-        // Add event listeners for each copy button
+        // Copy button functionality
         document.querySelectorAll('.copy-btn').forEach(button => {
             button.addEventListener('click', function() {
                 const cashtag = this.getAttribute('data-cashtag');
@@ -249,7 +283,6 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
                 document.body.appendChild(tempInput);
                 tempInput.select();
                 tempInput.setSelectionRange(0, 99999);
-
                 try {
                     document.execCommand('copy');
                     this.innerHTML = 'copied!';
@@ -260,12 +293,10 @@ $formatted_balance = number_format($balance, 2, '.', $balance >= 1000 ? ',' : ''
                     console.error('Copy failed:', e);
                     alert('Copy to clipboard failed. Please try manually.');
                 }
-
                 document.body.removeChild(tempInput);
             });
         });
     </script>
 </body>
 </html>
-
 <?php include('inc/footer.php'); ?>
