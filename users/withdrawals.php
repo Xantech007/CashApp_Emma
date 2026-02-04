@@ -111,12 +111,6 @@ include('inc/navbar.php');
 
         <h1>Available Balance: <?= htmlspecialchars($currency) ?><?= number_format($display_balance, 2) ?></h1>
 
-        <?php if (in_array($verify, [2, 3]) && $rate != 1.0): ?>
-            <small style="color:#666; display:block; margin-top:6px; font-size:0.95rem;">
-                (Base balance: <?= htmlspecialchars($currency) ?><?= number_format($balance, 2) ?> × rate <?= number_format($rate, 4) ?>)
-            </small>
-        <?php endif; ?>
-
         <nav>
             <ol class="breadcrumb">
                 <li class="breadcrumb-item"><a href="index">Home</a></li>
