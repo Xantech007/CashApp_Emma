@@ -1,252 +1,189 @@
 <?php
 session_start();
-include('inc/header.php');
-include('inc/navbar.php');
-include('inc/sidebar.php');
-?>
-<main id="main" class="main">
-    <div class="pagetitle">
-        <h1>Manage Users</h1>
-        <nav>
-            <ol class="breadcrumb">
-                <li class="breadcrumb-item"><a href="dashboard">Home</a></li>
-                <li class="breadcrumb-item">Users</li>
-                <li class="breadcrumb-item active">Manage Users</li>
-            </ol>
-        </nav>
-    </div>
+include('../../config/dbcon.php');
 
-    <div class="card">
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-borderless">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Name</th>
-                            <th>Email</th>
-                            <th>Referred By</th>
-                            <th>Profile</th>
-                            <th>Verification Status</th>
-                            <th>Convert Currency</th>
-                            <th>Edit</th>
-                            <th>Delete</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php
-                        // === PAGINATION SETUP ===
-                        $limit = 25;
-                        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-                        $offset = ($page - 1) * $limit;
+header('Content-Type: application/json'); // We'll switch to text/html only when needed
 
-                        // Count total users
-                        $count_query = "SELECT COUNT(*) as total FROM users";
-                        $count_result = mysqli_query($con, $count_query);
-                        $total_users = mysqli_fetch_assoc($count_result)['total'];
-                        $total_pages = ceil($total_users / $limit);
-
-                        // Fetch users for current page
-                        $query = "SELECT id, name, email, refered_by, image, verify, convert_currency
-                                  FROM users
-                                  ORDER BY id DESC
-                                  LIMIT ? OFFSET ?";
-                        $stmt = $con->prepare($query);
-                        $stmt->bind_param("ii", $limit, $offset);
-                        $stmt->execute();
-                        $query_run = $stmt->get_result();
-
-                        if (mysqli_num_rows($query_run) > 0) {
-                            foreach ($query_run as $data) {
-                                $verify_status = match ((int)$data['verify']) {
-                                    0 => 'Not Verified',
-                                    1 => 'Under Review',
-                                    2 => 'Verified',
-                                    3 => 'Partial',
-                                    default => 'Not Verified'
-                                };
-
-                                $badge = match ((int)$data['verify']) {
-                                    0, null => 'bg-danger',
-                                    1 => 'bg-warning',
-                                    2 => 'bg-success',
-                                    3 => 'bg-purple',
-                                    default => 'bg-danger'
-                                };
-
-                                $convert_enabled = !empty($data['convert_currency']) && (int)$data['convert_currency'] === 1;
-                        ?>
-                                <tr>
-                                    <td><?= $data['id'] ?></td>
-                                    <td><?= htmlspecialchars($data['name']) ?></td>
-                                    <td><?= htmlspecialchars($data['email']) ?></td>
-                                    <td><?= htmlspecialchars($data['refered_by'] ?? '-') ?></td>
-                                    <td>
-                                        <img src="../Uploads/profile-picture/<?= htmlspecialchars($data['image']) ?>"
-                                             style="width:50px;height:50px;border-radius:50%;object-fit:cover;"
-                                             loading="lazy" alt="Profile">
-                                    </td>
-                                    <td>
-                                        <span class="badge <?= $badge ?>"><?= $verify_status ?></span>
-                                        <button type="button" class="btn btn-outline-primary btn-sm mt-1 verify-btn"
-                                                data-id="<?= $data['id'] ?>"
-                                                data-name="<?= htmlspecialchars($data['name']) ?>"
-                                                data-status="<?= (int)$data['verify'] ?>">
-                                            Change
-                                        </button>
-                                    </td>
-
-                                    <!-- NEW COLUMN: Convert Currency -->
-                                    <td>
-                                        <button type="button"
-                                                class="btn btn-sm convert-toggle <?= $convert_enabled ? 'btn-success' : 'btn-outline-secondary' ?>"
-                                                data-id="<?= $data['id'] ?>"
-                                                data-enabled="<?= $convert_enabled ? '1' : '0' ?>">
-                                            <?= $convert_enabled ? 'ON' : 'OFF' ?>
-                                        </button>
-                                    </td>
-
-                                    <td>
-                                        <a href="edit-user?id=<?= $data['id'] ?>" class="btn btn-light">Edit</a>
-                                    </td>
-                                    <td>
-                                        <form action="codes/users.php" method="POST" style="display:inline;">
-                                            <input type="hidden" name="profile_pic" value="<?= htmlspecialchars($data['image']) ?>">
-                                            <button class="btn btn-outline-danger" name="delete_user" value="<?= $data['id'] ?>">Delete</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                        <?php
-                            }
-                        } else {
-                            echo '<tr><td colspan="9" class="text-center">No users found.</td></tr>';
-                        }
-                        $stmt->close();
-                        ?>
-                    </tbody>
-                </table>
-
-                <!-- === PAGINATION CONTROLS === -->
-                <?php if ($total_pages > 1): ?>
-                <nav aria-label="Page navigation">
-                    <ul class="pagination justify-content-center mt-4">
-                        <li class="page-item <?= $page <= 1 ? 'disabled' : '' ?>">
-                            <a class="page-link" href="?page=<?= $page - 1 ?>" tabindex="-1">Previous</a>
-                        </li>
-                        <?php
-                        $start = max(1, $page - 2);
-                        $end = min($total_pages, $page + 2);
-                        for ($i = $start; $i <= $end; $i++):
-                        ?>
-                            <li class="page-item <?= $i == $page ? 'active' : '' ?>">
-                                <a class="page-link" href="?page=<?= $i ?>"><?= $i ?></a>
-                            </li>
-                        <?php endfor; ?>
-                        <li class="page-item <?= $page >= $total_pages ? 'disabled' : '' ?>">
-                            <a class="page-link" href="?page=<?= $page + 1 ?>">Next</a>
-                        </li>
-                    </ul>
-                </nav>
-                <?php endif; ?>
-            </div>
-        </div>
-    </div>
-
-    <!-- === SINGLE SHARED MODAL FOR VERIFICATION === -->
-    <div class="modal fade" id="verifyModal" tabindex="-1">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Change Status for <span id="modalUserName"></span></h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="verifyForm" action="codes/users.php" method="POST">
-                        <input type="hidden" name="user_id" id="modalUserId">
-                        <div class="mb-3">
-                            <label class="form-label">Verification Status</label>
-                            <select name="verify_status" class="form-control" required>
-                                <option value="0">Not Verified</option>
-                                <option value="1">Under Review</option>
-                                <option value="2">Verified</option>
-                                <option value="3">Partial</option>
-                            </select>
-                        </div>
-                        <button type="submit" class="btn btn-secondary" name="update_verify_status">Save</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-    </div>
-
-</main>
-
-<!-- Custom Purple Badge -->
-<style>
-    .bg-purple {
-        background-color: #6f42c1 !important;
-        color: white !important;
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    // For AJAX we return JSON, for form submits we use session + redirect
+    if (isset($_POST['toggle_convert_currency'])) {
+        echo json_encode(['success' => false, 'message' => 'Invalid request method']);
+        exit();
     }
-</style>
+    $_SESSION['error'] = "Invalid request method.";
+    header("Location: ../manage-users.php");
+    exit();
+}
 
-<!-- JavaScript -->
-<script>
-document.addEventListener('DOMContentLoaded', function () {
+// ────────────────────────────────────────────────
+//  TOGGLE CONVERT CURRENCY (AJAX from manage-users.php)
+// ────────────────────────────────────────────────
+if (isset($_POST['toggle_convert_currency'])) {
+    $user_id   = isset($_POST['user_id'])   ? (int)$_POST['user_id']   : 0;
+    $new_value = isset($_POST['new_value']) ? (int)$_POST['new_value'] : -1;
 
-    // Verification status modal
-    document.querySelectorAll('.verify-btn').forEach(btn => {
-        btn.addEventListener('click', function () {
-            const id = this.dataset.id;
-            const name = this.dataset.name;
-            const status = this.dataset.status;
+    if ($user_id < 1 || !in_array($new_value, [0, 1], true)) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Invalid parameters'
+        ]);
+        exit();
+    }
 
-            document.getElementById('modalUserId').value = id;
-            document.getElementById('modalUserName').textContent = name;
-            document.querySelector('#verifyModal select').value = status;
+    $stmt = $con->prepare("UPDATE users SET convert_currency = ? WHERE id = ? LIMIT 1");
+    $stmt->bind_param("ii", $new_value, $user_id);
 
-            const modal = new bootstrap.Modal(document.getElementById('verifyModal'));
-            modal.show();
-        });
-    });
+    if ($stmt->execute()) {
+        echo json_encode(['success' => true]);
+    } else {
+        echo json_encode([
+            'success' => false,
+            'message' => $con->error ?: 'Database update failed'
+        ]);
+    }
 
-    // Convert Currency Toggle
-    document.querySelectorAll('.convert-toggle').forEach(btn => {
-        btn.addEventListener('click', function () {
-            const userId = this.dataset.id;
-            const isCurrentlyOn = this.dataset.enabled === '1';
-            const newValue = isCurrentlyOn ? 0 : 1;
+    $stmt->close();
+    exit(); // Important — stop here for AJAX
+}
 
-            if (!confirm(`Turn currency conversion ${newValue === 1 ? 'ON' : 'OFF'} for this user?`)) {
-                return;
-            }
+// ────────────────────────────────────────────────
+//  UPDATE USER (from edit-user.php)
+// ────────────────────────────────────────────────
+if (isset($_POST['update_user'])) {
+    $user_id = $_POST['user_id'] ?? '';
+    $email = trim($_POST['email'] ?? '');
+    $balance = $_POST['balance'] ?? '';
+    $referal_bonus = $_POST['referal_bonus'] ?? '';
+    $message = $_POST['message'] ?? '';
+    $payment_amount = !empty($_POST['payment_amount']) ? floatval($_POST['payment_amount']) : null;
+    $new_password = !empty($_POST['password']) ? trim($_POST['password']) : '';
 
-            fetch('codes/users.php', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `toggle_convert_currency=1&user_id=${userId}&new_value=${newValue}`
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    // Update UI
-                    btn.dataset.enabled = newValue;
-                    btn.textContent = newValue === 1 ? 'ON' : 'OFF';
-                    btn.classList.remove('btn-success', 'btn-outline-secondary');
-                    btn.classList.add(newValue === 1 ? 'btn-success' : 'btn-outline-secondary');
-                } else {
-                    alert('Failed to update: ' + (data.message || 'Unknown error'));
-                }
-            })
-            .catch(err => {
-                console.error('Toggle error:', err);
-                alert('Error communicating with server');
-            });
-        });
-    });
+    // Validation
+    if (!is_numeric($user_id) || empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $_SESSION['error'] = "Please check the required fields.";
+        header("Location: ../edit-user.php?id=$user_id");
+        exit();
+    }
 
-});
-</script>
+    if (!is_numeric($balance) || $balance < 0 || !is_numeric($referal_bonus) || $referal_bonus < 0) {
+        $_SESSION['error'] = "Balance and bonus cannot be negative.";
+        header("Location: ../edit-user.php?id=$user_id");
+        exit();
+    }
 
-<?php include('inc/footer.php'); ?>
-</body>
-</html>
+    if ($payment_amount !== null && $payment_amount < 0) {
+        $_SESSION['error'] = "Payment amount cannot be negative.";
+        header("Location: ../edit-user.php?id=$user_id");
+        exit();
+    }
+
+    // Build dynamic query
+    $sql = "UPDATE users SET
+            email = ?,
+            balance = ?,
+            referal_bonus = ?,
+            message = ?";
+    $params = [$email, $balance, $referal_bonus, $message];
+    $types = "sdds";
+
+    if ($payment_amount !== null) {
+        $sql .= ", payment_amount = ?";
+        $params[] = $payment_amount;
+        $types .= "d";
+    } else {
+        $sql .= ", payment_amount = NULL";
+    }
+
+    if (!empty($new_password)) {
+        $hashed = password_hash($new_password, PASSWORD_DEFAULT);
+        $sql .= ", password = ?";
+        $params[] = $hashed;
+        $types .= "s";
+    }
+
+    $sql .= " WHERE id = ? LIMIT 1";
+    $params[] = $user_id;
+    $types .= "i";
+
+    $stmt = $con->prepare($sql);
+    $stmt->bind_param($types, ...$params);
+
+    if ($stmt->execute()) {
+        $_SESSION['success'] = "User updated successfully.";
+    } else {
+        $_SESSION['error'] = "Failed to update user.";
+    }
+
+    $stmt->close();
+    header("Location: ../edit-user.php?id=$user_id");
+    exit();
+}
+
+// ────────────────────────────────────────────────
+//  DELETE USER
+// ────────────────────────────────────────────────
+elseif (isset($_POST['delete_user'])) {
+    $id = $_POST['delete_user'] ?? '';
+    $profile_pic = $_POST['profile_pic'] ?? '';
+
+    if (!is_numeric($id)) {
+        $_SESSION['error'] = "Invalid user ID.";
+        header("Location: ../manage-users.php");
+        exit();
+    }
+
+    $stmt = $con->prepare("DELETE FROM users WHERE id = ? LIMIT 1");
+    $stmt->bind_param("i", $id);
+
+    if ($stmt->execute()) {
+        if (!empty($profile_pic) && file_exists("../../Uploads/profile-picture/" . $profile_pic)) {
+            @unlink("../../Uploads/profile-picture/" . $profile_pic);
+        }
+        $_SESSION['success'] = "User deleted successfully.";
+    } else {
+        $_SESSION['error'] = "Failed to delete user.";
+    }
+
+    $stmt->close();
+    header("Location: ../manage-users.php");
+    exit();
+}
+
+// ────────────────────────────────────────────────
+//  UPDATE VERIFICATION STATUS
+// ────────────────────────────────────────────────
+elseif (isset($_POST['update_verify_status'])) {
+    $user_id = $_POST['user_id'] ?? '';
+    $verify_status = $_POST['verify_status'] ?? '';
+
+    if (!is_numeric($user_id) || !in_array($verify_status, ['0','1','2','3'], true)) {
+        $_SESSION['error'] = "Invalid data.";
+        header("Location: ../manage-users.php");
+        exit();
+    }
+
+    $stmt = $con->prepare("UPDATE users SET verify = ? WHERE id = ? LIMIT 1");
+    $stmt->bind_param("ii", $verify_status, $user_id);
+    $stmt->execute();
+    $stmt->close();
+
+    $_SESSION['success'] = "Verification status updated.";
+    header("Location: ../manage-users.php");
+    exit();
+}
+
+// ────────────────────────────────────────────────
+//  FALLBACK
+// ────────────────────────────────────────────────
+else {
+    if (isset($_POST['toggle_convert_currency'])) {
+        echo json_encode(['success' => false, 'message' => 'Invalid action']);
+    } else {
+        $_SESSION['error'] = "Invalid action.";
+        header("Location: ../manage-users.php");
+    }
+    exit();
+}
+
+$con->close();
+?>
