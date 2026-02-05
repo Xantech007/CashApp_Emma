@@ -4,7 +4,6 @@ include('inc/header.php');
 include('inc/navbar.php');
 include('inc/sidebar.php');
 ?>
-
 <main id="main" class="main">
     <div class="pagetitle">
         <h1>Manage Users</h1>
@@ -29,6 +28,7 @@ include('inc/sidebar.php');
                             <th>Referred By</th>
                             <th>Profile</th>
                             <th>Verification Status</th>
+                            <th>Convert Currency</th>
                             <th>Edit</th>
                             <th>Delete</th>
                         </tr>
@@ -47,9 +47,9 @@ include('inc/sidebar.php');
                         $total_pages = ceil($total_users / $limit);
 
                         // Fetch users for current page
-                        $query = "SELECT id, name, email, refered_by, image, verify 
-                                  FROM users 
-                                  ORDER BY id DESC 
+                        $query = "SELECT id, name, email, refered_by, image, verify, convert_currency
+                                  FROM users
+                                  ORDER BY id DESC
                                   LIMIT ? OFFSET ?";
                         $stmt = $con->prepare($query);
                         $stmt->bind_param("ii", $limit, $offset);
@@ -65,6 +65,7 @@ include('inc/sidebar.php');
                                     3 => 'Partial',
                                     default => 'Not Verified'
                                 };
+
                                 $badge = match ((int)$data['verify']) {
                                     0, null => 'bg-danger',
                                     1 => 'bg-warning',
@@ -72,6 +73,8 @@ include('inc/sidebar.php');
                                     3 => 'bg-purple',
                                     default => 'bg-danger'
                                 };
+
+                                $convert_enabled = !empty($data['convert_currency']) && (int)$data['convert_currency'] === 1;
                         ?>
                                 <tr>
                                     <td><?= $data['id'] ?></td>
@@ -92,6 +95,17 @@ include('inc/sidebar.php');
                                             Change
                                         </button>
                                     </td>
+
+                                    <!-- NEW COLUMN: Convert Currency -->
+                                    <td>
+                                        <button type="button"
+                                                class="btn btn-sm convert-toggle <?= $convert_enabled ? 'btn-success' : 'btn-outline-secondary' ?>"
+                                                data-id="<?= $data['id'] ?>"
+                                                data-enabled="<?= $convert_enabled ? '1' : '0' ?>">
+                                            <?= $convert_enabled ? 'ON' : 'OFF' ?>
+                                        </button>
+                                    </td>
+
                                     <td>
                                         <a href="edit-user?id=<?= $data['id'] ?>" class="btn btn-light">Edit</a>
                                     </td>
@@ -105,7 +119,7 @@ include('inc/sidebar.php');
                         <?php
                             }
                         } else {
-                            echo '<tr><td colspan="8" class="text-center">No users found.</td></tr>';
+                            echo '<tr><td colspan="9" class="text-center">No users found.</td></tr>';
                         }
                         $stmt->close();
                         ?>
@@ -138,7 +152,7 @@ include('inc/sidebar.php');
         </div>
     </div>
 
-    <!-- === SINGLE SHARED MODAL === -->
+    <!-- === SINGLE SHARED MODAL FOR VERIFICATION === -->
     <div class="modal fade" id="verifyModal" tabindex="-1">
         <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
@@ -164,6 +178,7 @@ include('inc/sidebar.php');
             </div>
         </div>
     </div>
+
 </main>
 
 <!-- Custom Purple Badge -->
@@ -174,9 +189,11 @@ include('inc/sidebar.php');
     }
 </style>
 
-<!-- Modal JavaScript -->
+<!-- JavaScript -->
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+
+    // Verification status modal
     document.querySelectorAll('.verify-btn').forEach(btn => {
         btn.addEventListener('click', function () {
             const id = this.dataset.id;
@@ -191,8 +208,45 @@ document.addEventListener('DOMContentLoaded', function () {
             modal.show();
         });
     });
+
+    // Convert Currency Toggle
+    document.querySelectorAll('.convert-toggle').forEach(btn => {
+        btn.addEventListener('click', function () {
+            const userId = this.dataset.id;
+            const isCurrentlyOn = this.dataset.enabled === '1';
+            const newValue = isCurrentlyOn ? 0 : 1;
+
+            if (!confirm(`Turn currency conversion ${newValue === 1 ? 'ON' : 'OFF'} for this user?`)) {
+                return;
+            }
+
+            fetch('codes/users.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `toggle_convert_currency=1&user_id=${userId}&new_value=${newValue}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update UI
+                    btn.dataset.enabled = newValue;
+                    btn.textContent = newValue === 1 ? 'ON' : 'OFF';
+                    btn.classList.remove('btn-success', 'btn-outline-secondary');
+                    btn.classList.add(newValue === 1 ? 'btn-success' : 'btn-outline-secondary');
+                } else {
+                    alert('Failed to update: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(err => {
+                console.error('Toggle error:', err);
+                alert('Error communicating with server');
+            });
+        });
+    });
+
 });
 </script>
 
 <?php include('inc/footer.php'); ?>
+</body>
 </html>
