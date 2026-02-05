@@ -114,7 +114,7 @@ include('inc/navbar.php');
         $min_display = $currency_symbol . number_format($min_withdrawal, 0);
         ?>
 
-        <h1>Available Balance: <?= htmlspecialchars($currency_symbol) ?><?= number_format($display_balance, 2) ?></h1>
+        <h1>Available Balance: <?= htmlspecialchars($currency) ?><?= number_format($display_balance, 2) ?></h1>
         <nav>
             <ol class="breadcrumb">
                 <li class="breadcrumb-item"><a href="index">Home</a></li>
