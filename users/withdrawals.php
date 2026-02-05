@@ -55,10 +55,11 @@ include('inc/navbar.php');
         // Default values
         $rate             = 1.0;
         $display_balance  = $balance;
-        $currency         = 'USD'; // fallback
+        $currency_symbol  = '$';   // Always fallback to $ when not converting
+        $currency         = 'USD'; // Always fallback to USD when not converting
 
-        // Fetch region settings (rate + currency + payment channels)
-        if (!empty($user_country)) {
+        // Fetch region settings ONLY if convert_currency === 1
+        if ($convert_currency === 1 && !empty($user_country)) {
             $region_query = "SELECT rate, currency, crypto, Channel, Channel_name, Channel_number,
                                     alt_channel, alt_ch_name, alt_ch_number, alt_currency
                              FROM region_settings
@@ -73,25 +74,25 @@ include('inc/navbar.php');
                 $rate = (float)($region_data['rate'] ?? 1.0);
                 if ($rate <= 0) $rate = 1.0;
 
-                // Decide currency & display balance
-                if ($convert_currency === 1) {
-                    $display_balance = round($balance * $rate, 2);
-                    $currency = $region_data['currency'] ?? 'USD';
-                } else {
-                    $display_balance = $balance;
-                    $currency = 'USD'; // or keep original if you store it elsewhere
-                }
+                // Apply conversion
+                $display_balance = round($balance * $rate, 2);
+
+                // Use region currency
+                $currency = $region_data['currency'] ?? 'USD';
+                $currency_symbol = $currency; // e.g. ₦, GHS, etc.
 
                 // Payment channel logic
                 if ($region_data['crypto'] == 1) {
                     $channel_label       = $region_data['alt_channel']    ?? 'Crypto Channel';
                     $channel_name_label  = $region_data['alt_ch_name']    ?? 'Crypto Name';
                     $channel_number_label= $region_data['alt_ch_number']  ?? 'Crypto Address';
+                    $currency_symbol     = $region_data['alt_currency']   ?? $currency_symbol;
                     $currency            = $region_data['alt_currency']   ?? $currency;
                 } else {
                     $channel_label       = $region_data['Channel']        ?? 'Bank';
                     $channel_name_label  = $region_data['Channel_name']   ?? 'Account Name';
                     $channel_number_label= $region_data['Channel_number'] ?? 'Account Number';
+                    $currency_symbol     = $region_data['currency']       ?? $currency_symbol;
                     $currency            = $region_data['currency']       ?? $currency;
                 }
             } else {
@@ -102,18 +103,18 @@ include('inc/navbar.php');
             }
             mysqli_stmt_close($region_stmt);
         } else {
-            // No country → pure fallback
+            // No conversion → pure fallback to USD / $
             $channel_label = 'Bank';
             $channel_name_label = 'Account Name';
             $channel_number_label = 'Account Number';
         }
 
-        // Minimum withdrawal amount
+        // Minimum withdrawal amount (shown in current currency/symbol)
         $min_withdrawal = 50;
-        $min_display = $currency . number_format($min_withdrawal, 0);
+        $min_display = $currency_symbol . number_format($min_withdrawal, 0);
         ?>
 
-        <h1>Available Balance: <?= htmlspecialchars($currency) ?><?= number_format($display_balance, 2) ?></h1>
+        <h1>Available Balance: <?= htmlspecialchars($currency_symbol) ?><?= number_format($display_balance, 2) ?></h1>
         <nav>
             <ol class="breadcrumb">
                 <li class="breadcrumb-item"><a href="index">Home</a></li>
@@ -220,9 +221,9 @@ include('inc/navbar.php');
                                     </div>
                                     <input type="hidden" name="email" value="<?= htmlspecialchars($_SESSION['email']) ?>">
                                     <input type="hidden" name="balance" value="<?= htmlspecialchars($balance) ?>">
-                                    <!-- Helpful for backend: original vs displayed currency -->
                                     <input type="hidden" name="display_currency" value="<?= htmlspecialchars($currency) ?>">
                                     <input type="hidden" name="convert_currency" value="<?= $convert_currency ?>">
+                                    <input type="hidden" name="currency_symbol" value="<?= htmlspecialchars($currency_symbol) ?>">
                                 </form>
                             </div>
                         </div>
@@ -280,7 +281,7 @@ include('inc/navbar.php');
                         if (mysqli_num_rows($query_run) > 0) {
                             while ($data = mysqli_fetch_assoc($query_run)) { ?>
                                 <tr>
-                                    <td><?= htmlspecialchars($currency) ?><?= number_format($data['amount'], 2) ?></td>
+                                    <td><?= htmlspecialchars($currency_symbol) ?><?= number_format($data['amount'], 2) ?></td>
                                     <td><?= htmlspecialchars($data['channel']) ?></td>
                                     <td><?= htmlspecialchars($data['channel_name']) ?></td>
                                     <td><?= htmlspecialchars($data['channel_number']) ?></td>
