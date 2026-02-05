@@ -16,26 +16,32 @@ $name            = 'Guest';
 $balance         = 0.00;
 $display_amount  = "0.00";
 $currency_symbol = "$";           // default fallback
-$verify_status   = 0;
+$convert_currency = 0;
+$special_rate_applied = false;
 
 if ($email) {
-    // Get user data: name, balance, verify status, country
-    $user_query = "SELECT name, balance, verify, country FROM users WHERE email = ?";
+    // Get user data: name, balance, convert_currency, country
+    $user_query = "SELECT name, balance, convert_currency, country 
+                   FROM users 
+                   WHERE email = ?";
     $stmt = $con->prepare($user_query);
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $user_result = $stmt->get_result();
 
     if ($user_result && $user_result->num_rows > 0) {
-        $user_data     = $user_result->fetch_assoc();
-        $name          = $user_data['name'] ?? 'Guest';
-        $balance       = (float)($user_data['balance'] ?? 0.00);
-        $verify_status = (int)($user_data['verify'] ?? 0);
-        $user_country  = $user_data['country'] ?? null;
+        $user_data         = $user_result->fetch_assoc();
+        $name              = $user_data['name'] ?? 'Guest';
+        $balance           = (float)($user_data['balance'] ?? 0.00);
+        $convert_currency  = (int)($user_data['convert_currency'] ?? 0);
+        $user_country      = $user_data['country'] ?? null;
 
-        // Apply special rate & currency only for verify = 2 or 3
-        if (in_array($verify_status, [2, 3]) && $user_country) {
-            $region_query = "SELECT rate, currency FROM region_settings WHERE country = ? LIMIT 1";
+        // Apply conversion only when convert_currency = 1
+        if ($convert_currency === 1 && $user_country) {
+            $region_query = "SELECT rate, currency 
+                             FROM region_settings 
+                             WHERE country = ? 
+                             LIMIT 1";
             $region_stmt = $con->prepare($region_query);
             $region_stmt->bind_param("s", $user_country);
             $region_stmt->execute();
@@ -46,14 +52,15 @@ if ($email) {
                 $currency_symbol = $region_row['currency'] ?: '$';
                 $calculated      = $balance * $rate;
                 $display_amount  = number_format($calculated, 2, '.', $calculated >= 1000 ? ',' : '');
+                $special_rate_applied = true;
             } else {
-                // Region not found → show normal balance with warning symbol
-                $display_amount = number_format($balance, 2, '.', $balance >= 1000 ? ',' : '');
-                $currency_symbol = "$"; // or you can set "???" or log error
+                // Region not found → fallback to original
+                $display_amount  = number_format($balance, 2, '.', $balance >= 1000 ? ',' : '');
+                $currency_symbol = "$";
             }
             $region_stmt->close();
         } else {
-            // Normal user (verify not 2 or 3)
+            // Default: no conversion
             $display_amount = number_format($balance, 2, '.', $balance >= 1000 ? ',' : '');
         }
     }
@@ -115,11 +122,6 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
             color: #1a1a1a;
             margin: 0;
         }
-        .card-detail {
-            font-size: 12px;
-            color: #757575;
-            margin-top: 5px;
-        }
         .action-buttons {
             display: flex;
             justify-content: space-between;
@@ -141,24 +143,10 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
         .btn-add { background: #007bff; }
         .btn-withdraw { background: #6c757d; }
         .btn-used-cashtags { background: #28a745; }
-        .verified { color: #28a745; font-size: 12px; margin-top: 6px; }
-        .progress {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-        .progress-circle {
-            width: 12px;
-            height: 12px;
-            background: #ffd700;
-            border-radius: 50%;
-        }
-        .bitcoin-graph {
-            width: 50px;
-            height: 20px;
-            background: linear-gradient(to right, #28a745, #ffd700);
-            border-radius: 5px;
-            margin-left: 5px;
+        .converted { 
+            color: #28a745; 
+            font-size: 12px; 
+            margin-top: 6px; 
         }
         .copy-btn {
             border: none;
@@ -220,8 +208,8 @@ if ($cashtag_result && mysqli_num_rows($cashtag_result) > 0) {
             </div>
             <div class="card-title">Hello <?php echo htmlspecialchars($name); ?>, Scan CashTags to Add Funds into Your Account</div>
             
-            <?php if (in_array($verify_status, [2, 3])): ?>
-                <div class="verified">• Verified account (special rate applied)</div>
+            <?php if ($special_rate_applied): ?>
+                <div class="converted">• Currency converted (regional rate applied)</div>
             <?php endif; ?>
         </div>
 
